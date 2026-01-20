@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+    <title>Caro Pro AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+      body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: white; }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #1e293b; }
+      ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+      .loader { border: 3px solid #334155; border-radius: 50%; border-top: 3px solid #3b82f6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="typescript,react">
+      const { useState, useEffect, useRef, useCallback } = React;
+      const BOARD_SIZE = 24; const WIN_CONDITION = 5;
+      const COLORS = { X: 'text-blue-500', O: 'text-red-500', WIN_BG: 'bg-green-500/20', LAST_MOVE_BORDER: 'border-yellow-400' };
+
+      const createEmptyBoard = () => Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(null));
+      const checkWin = (board, x, y, player) => {
+        const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
+        for (const [dx, dy] of directions) {
+          let count = 1; const line = [{x, y}];
+          for (let i = 1; i < WIN_CONDITION; i++) { const nx = x + dx * i, ny = y + dy * i; if (nx<0||ny<0||nx>=BOARD_SIZE||ny>=BOARD_SIZE) break; if (board[ny][nx]===player) { count++; line.push({x: nx, y: ny}); } else break; }
+          for (let i = 1; i < WIN_CONDITION; i++) { const nx = x - dx * i, ny = y - dy * i; if (nx<0||ny<0||nx>=BOARD_SIZE||ny>=BOARD_SIZE) break; if (board[ny][nx]===player) { count++; line.push({x: nx, y: ny}); } else break; }
+          if (count >= WIN_CONDITION) return line;
+        }
+        return null;
+      };
+
+      const countConsecutive = (board, x, y, player) => {
+        let totalScore = 0;
+        const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
+        for (const [dx, dy] of directions) {
+          let consecutive = 0, blocked = 0;
+          for (let i = 1; i <= 4; i++) { const nx = x + dx * i, ny = y + dy * i; if (nx<0||ny<0||nx>=BOARD_SIZE||ny>=BOARD_SIZE) { blocked++; break; } if (board[ny][nx]===player) consecutive++; else if (board[ny][nx]!==null) { blocked++; break; } else break; }
+          for (let i = 1; i <= 4; i++) { const nx = x - dx * i, ny = y - dy * i; if (nx<0||ny<0||nx>=BOARD_SIZE||ny>=BOARD_SIZE) { blocked++; break; } if (board[ny][nx]===player) consecutive++; else if (board[ny][nx]!==null) { blocked++; break; } else break; }
+          if (consecutive >= 4) totalScore += 100000;
+          else if (consecutive === 3 && blocked === 0) totalScore += 10000;
+          else if (consecutive === 3 && blocked === 1) totalScore += 1500;
+          else if (consecutive === 2 && blocked === 0) totalScore += 1000;
+          else if (consecutive === 2 && blocked === 1) totalScore += 100;
+          else if (consecutive === 1 && blocked === 0) totalScore += 50;
+        }
+        return totalScore;
+      }
+
+      const evaluateMove = (board, x, y, aiPlayer, humanPlayer) => {
+          const attackScore = countConsecutive(board, x, y, aiPlayer);
+          const defenseScore = countConsecutive(board, x, y, humanPlayer);
+          if (attackScore >= 100000) return 200000000;
+          if (defenseScore >= 100000) return 100000000;
+          if (attackScore >= 10000) return 50000000;
+          if (defenseScore >= 10000) return 20000000;
+          return attackScore * 1.2 + defenseScore;
+      }
+
+      const getBestMove = (board, aiPlayer) => {
+        const humanPlayer = aiPlayer === 'X' ? 'O' : 'X';
+        let bestScore = -Infinity; let move = { x: Math.floor(BOARD_SIZE / 2), y: Math.floor(BOARD_SIZE / 2) };
+        if (board.every(row => row.every(cell => cell === null))) return move;
+        const potentialMoves = []; const radius = 2;
+        for(let y = 0; y < BOARD_SIZE; y++) {
+          for(let x = 0; x < BOARD_SIZE; x++) {
+            if (board[y][x] !== null) continue;
+            let hasNeighbor = false;
+            for (let dy = -radius; dy <= radius; dy++) {
+              for (let dx = -radius; dx <= radius; dx++) { if (dx===0 && dy===0) continue; const ny=y+dy, nx=x+dx; if (ny>=0&&ny<BOARD_SIZE&&nx>=0&&nx<BOARD_SIZE && board[ny][nx]!==null) { hasNeighbor=true; break; } }
+              if (hasNeighbor) break;
+            }
+            if (hasNeighbor) potentialMoves.push({x, y});
+          }
+        }
+        for (const pos of potentialMoves) {
+          const score = evaluateMove(board, pos.x, pos.y, aiPlayer, humanPlayer);
+          if (score > bestScore) { bestScore = score; move = pos; }
+        }
+        return move;
+      };
+
+      const Cell = React.memo(({ value, isLastMove, isWinningCell, onClick, disabled }) => {
+        let content = null, textColor = '';
+        if (value === 'X') { content = <svg className="w-3/4 h-3/4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 6L6 18M6 6l12 12"></path></svg>; textColor = COLORS.X; }
+        else if (value === 'O') { content = <svg className="w-3/4 h-3/4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"></circle></svg>; textColor = COLORS.O; }
+        let bgClass = isWinningCell ? "bg-green-500/30 ring-2 ring-green-500 animate-pulse" : isLastMove ? "bg-slate-700 ring-2 ring-yellow-400" : "bg-slate-800 hover:bg-slate-700";
+        return <div onClick={disabled ? undefined : onClick} className={`w-full h-full aspect-square border border-slate-700 flex items-center justify-center cursor-pointer transition-all duration-150 ${bgClass} ${textColor} ${disabled ? 'cursor-default' : ''}`}>{content}</div>;
+      });
+
+      const Board = ({ board, lastMove, winningLine, onCellClick, disabled }) => {
+        const containerRef = useRef(null);
+        useEffect(() => { if (containerRef.current) { const el = containerRef.current; el.scrollTop = (el.scrollHeight - el.clientHeight) / 2; el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2; } }, []);
+        const isWinning = (x, y) => winningLine?.some(p => p.x === x && p.y === y);
+        return (
+          <div ref={containerRef} className="w-full h-full overflow-auto bg-slate-900 border-2 border-slate-700 rounded-lg shadow-2xl relative">
+            <div className="grid gap-[1px] bg-slate-700 mx-auto my-4" style={{ gridTemplateColumns: `repeat(${BOARD_SIZE}, 36px)`, width: 'max-content', padding: '1px' }}>
+              {board.map((row, y) => row.map((cell, x) => <Cell key={`${x}-${y}`} x={x} y={y} value={cell} isLastMove={lastMove?.x === x && lastMove?.y === y} isWinningCell={isWinning(x, y)} onClick={() => onCellClick(x, y)} disabled={disabled || cell !== null} />))}
+            </div>
+          </div>
+        );
+      };
+
+      // --- NEW COMPONENTS ---
+      const AVATARS = ['😎', '🤖', '🐱', '🐶', '🦊', '🐯', '🐼', '🐵', '👻', '👽', '💩', '🦄'];
+      
+      const AvatarDisplay = ({ avatar }) => {
+          const isImg = avatar && avatar.startsWith('data:image');
+          return (
+             <div className="w-16 h-16 rounded-full border-2 border-slate-600 bg-slate-800 flex items-center justify-center overflow-hidden shrink-0 shadow-md">
+                 {isImg ? (
+                     <img src={avatar} alt="avt" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display='none'; if(e.currentTarget.parentElement) e.currentTarget.parentElement.innerText = '👤'; }} />
+                 ) : (
+                     <div className="text-4xl">{avatar || '👤'}</div>
+                 )}
+             </div>
+          );
+      };
+
+      const AvatarSelector = ({ selectedAvatar, onSelect }) => {
+          const fileInputRef = useRef(null);
+          const handleImageUpload = (e) => {
+            const file = e.target.files?.[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
+                    const MAX_SIZE = 128; let width = img.width; let height = img.height;
+                    if (width > height) { if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; } } 
+                    else { if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; } }
+                    canvas.width = width; canvas.height = height;
+                    ctx.drawImage(img, 0, 0, width, height);
+                    onSelect(canvas.toDataURL('image/jpeg', 0.7));
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+            e.target.value = ''; // Reset input to allow selecting same file
+          };
+          const isImage = (a) => a && a.startsWith('data:image');
+
+          return (
+            <div className="flex flex-col items-center gap-3">
+              <div onClick={() => fileInputRef.current?.click()} className="relative w-24 h-24 rounded-full border-4 border-slate-700 bg-slate-800 flex items-center justify-center overflow-hidden cursor-pointer group shadow-xl">
+                  {isImage(selectedAvatar) ? <img src={selectedAvatar} className="w-full h-full object-cover"/> : <span className="text-5xl">{selectedAvatar}</span>}
+                  <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><span className="text-2xl">📷</span><span className="text-xs font-bold text-white">Đổi ảnh</span></div>
+              </div>
+              <input ref={fileInputRef} type="file" hidden accept="image/*" onChange={handleImageUpload} />
+              <div className="flex flex-wrap gap-2 justify-center bg-slate-800 p-2 rounded-lg border border-slate-700 max-w-[280px]">
+                {AVATARS.map((avatar) => (
+                  <button key={avatar} onClick={() => onSelect(avatar)} className={`w-9 h-9 text-lg flex items-center justify-center rounded transition-transform hover:scale-110 ${selectedAvatar === avatar ? 'bg-blue-600 ring-2 ring-blue-400 scale-110' : 'hover:bg-slate-700'}`}>{avatar}</button>
+                ))}
+                <button onClick={() => fileInputRef.current?.click()} className="w-9 h-9 text-lg flex items-center justify-center rounded hover:bg-slate-700 border border-slate-600 text-slate-400" title="Tải ảnh lên">+</button>
+              </div>
+            </div>
+          );
+      };
+
+      const RockPaperScissors = ({ myMove, opponentMove, onSelect, resultMessage, opponentName }) => {
+          const moves = [
+            { id: 'ROCK', icon: '✊', label: 'Búa' },
+            { id: 'PAPER', icon: '✋', label: 'Bao' },
+            { id: 'SCISSORS', icon: '✌️', label: 'Kéo' },
+          ];
+          return (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4">
+              <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-md w-full flex flex-col items-center">
+                <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500 mb-2">OẲN TÙ TÌ</h2>
+                <p className="text-slate-400 mb-6 text-sm">Người thắng sẽ được đi trước (X)</p>
+                <div className="flex justify-between w-full mb-8 px-4">
+                    <div className="flex flex-col items-center">
+                        <span className="text-blue-400 font-bold mb-2">Bạn</span>
+                        <div className={`w-20 h-20 flex items-center justify-center text-4xl bg-slate-800 rounded-full border-4 ${myMove ? 'border-blue-500' : 'border-slate-700 border-dashed'}`}>
+                            {myMove ? moves.find(m => m.id === myMove)?.icon : '?'}
+                        </div>
+                    </div>
+                    <div className="flex items-center justify-center font-bold text-2xl text-slate-600">VS</div>
+                    <div className="flex flex-col items-center">
+                        <span className="text-red-400 font-bold mb-2">{opponentName}</span>
+                        <div className={`w-20 h-20 flex items-center justify-center text-4xl bg-slate-800 rounded-full border-4 ${opponentMove ? 'border-red-500' : 'border-slate-700 border-dashed'}`}>
+                             {(opponentMove && myMove && resultMessage) ? moves.find(m => m.id === opponentMove)?.icon : (opponentMove ? '✔️' : '?')}
+                        </div>
+                    </div>
+                </div>
+                <div className="h-12 flex items-center justify-center mb-6 w-full">
+                    {resultMessage ? <div className="text-xl font-bold text-yellow-300 animate-bounce">{resultMessage}</div> : <div className="text-slate-400 animate-pulse">{!myMove ? "Hãy chọn nước đi..." : (!opponentMove ? `Đang chờ ${opponentName}...` : "Đang so kết quả...")}</div>}
+                </div>
+                <div className="flex gap-4 w-full justify-center">
+                    {moves.map((m) => (
+                        <button key={m.id} onClick={() => !myMove && onSelect(m.id)} disabled={!!myMove} className={`flex flex-col items-center justify-center w-24 h-24 rounded-xl border-2 transition-all ${myMove === m.id ? 'bg-blue-600 border-blue-400 scale-110 shadow-lg' : (myMove ? 'bg-slate-800 border-slate-700 opacity-50' : 'bg-slate-800 border-slate-600 hover:bg-slate-700 hover:scale-105')}`}>
+                            <span className="text-3xl mb-1">{m.icon}</span><span className="font-bold text-sm">{m.label}</span>
+                        </button>
+                    ))}
+                </div>
+              </div>
+            </div>
+          );
+      };
+
+      const OnlineMenu = ({ onCreate, onJoin, onBack, isConnecting, error, initialName, initialAvatar }) => {
+        const [joinId, setJoinId] = useState('');
+        const [name, setName] = useState(initialName);
+        const [avatar, setAvatar] = useState(initialAvatar);
+
+        useEffect(() => {
+            const params = new URLSearchParams(window.location.search);
+            const roomParam = params.get('room');
+            if (roomParam) setJoinId(roomParam);
+        }, []);
+
+        return (
+          <div className="flex flex-col gap-4 w-full max-w-sm">
+            <h3 className="text-xl font-bold text-blue-400 text-center mb-2">Chế độ Online (P2P)</h3>
+            {error && <div className="bg-red-500/20 text-red-300 p-2 rounded text-sm text-center border border-red-500/50">{error}</div>}
+            <div className="flex flex-col gap-2">
+                <label className="text-xs text-slate-400 ml-1">Chọn Avatar & Tên:</label>
+                <AvatarSelector selectedAvatar={avatar} onSelect={setAvatar} />
+                <input type="text" placeholder="Tên của bạn..." value={name} onChange={(e) => setName(e.target.value)} className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 outline-none focus:border-blue-500 font-bold" maxLength={10} />
+            </div>
+            <div className="border-t border-slate-700 my-2"></div>
+            
+            {!joinId && (
+                <button onClick={() => onCreate(name || 'Bạn', avatar)} disabled={isConnecting} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold transition-colors disabled:opacity-50">{isConnecting ? 'Đang tạo phòng...' : 'Tạo phòng mới (Host)'}</button>
+            )}
+            
+            {!joinId && <div className="relative flex py-2 items-center"><div className="flex-grow border-t border-slate-600"></div><span className="flex-shrink mx-4 text-slate-500 text-sm">HOẶC</span><div className="flex-grow border-t border-slate-600"></div></div>}
+            
+            <div className="flex gap-2"><input type="text" placeholder="Nhập ID phòng..." value={joinId} onChange={(e) => setJoinId(e.target.value)} className={`flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 outline-none focus:border-blue-500 ${joinId?'border-green-500 bg-green-900/20':''}`} /><button onClick={() => onJoin(joinId, name || 'Bạn', avatar)} disabled={!joinId || isConnecting} className="px-4 bg-green-600 hover:bg-green-500 rounded-lg font-bold transition-colors disabled:opacity-50 whitespace-nowrap">{joinId ? 'Vào Ngay' : 'Vào'}</button></div>
+            <button onClick={() => {
+                 try { if (window.history.pushState) { const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname; window.history.pushState({path:newUrl},'',newUrl); } } catch(e) { console.warn("Cannot update history:", e); }
+                 onBack();
+            }} className="mt-4 text-slate-400 hover:text-white underline text-sm">Quay lại Menu chính</button>
+          </div>
+        );
+      };
+
+      function App() {
+        const [localName, setLocalName] = useState('Bạn');
+        const [localAvatar, setLocalAvatar] = useState('😎');
+        const [copySuccess, setCopySuccess] = useState(false);
+
+        const [mode, setMode] = useState(null);
+        const [board, setBoard] = useState(createEmptyBoard());
+        const [currentPlayer, setCurrentPlayer] = useState('X');
+        const [myPlayerSide, setMyPlayerSide] = useState('X'); 
+        const [winner, setWinner] = useState(null);
+        const [winningLine, setWinningLine] = useState(null);
+        const [history, setHistory] = useState([]);
+        const [score, setScore] = useState({ X: 0, O: 0 });
+        const [isAiThinking, setIsAiThinking] = useState(false);
+        const [pveStartOption, setPveStartOption] = useState(null);
+
+        const boardRef = useRef(board);
+        const winnerRef = useRef(winner);
+        useEffect(() => { boardRef.current = board; }, [board]);
+        useEffect(() => { winnerRef.current = winner; }, [winner]);
+
+        const [onlineState, setOnlineState] = useState({ isHost: false, peerId: null, conn: null, status: 'DISCONNECTED', myName: 'Bạn', myAvatar: '😎', opponentName: 'Đối thủ', opponentAvatar: '👤' });
+        const [onlineError, setOnlineError] = useState(null);
+        const [rpsMyMove, setRpsMyMove] = useState(null);
+        const [rpsOpponentMove, setRpsOpponentMove] = useState(null);
+        const [rpsResult, setRpsResult] = useState(null);
+        const [resetRequestFromOpponent, setResetRequestFromOpponent] = useState(false);
+        const [waitingForResetResponse, setWaitingForResetResponse] = useState(false);
+
+        const peerRef = useRef(null); const connRef = useRef(null);
+
+        // Auto join link logic
+        useEffect(() => {
+            const params = new URLSearchParams(window.location.search);
+            const roomParam = params.get('room');
+            if (roomParam && !mode) setMode('PVP_ONLINE');
+        }, []);
+
+        const resetGame = useCallback(() => {
+          setBoard(createEmptyBoard()); setWinner(null); setWinningLine(null); setHistory([]); setCurrentPlayer('X'); setIsAiThinking(false);
+          setResetRequestFromOpponent(false); setWaitingForResetResponse(false);
+        }, []);
+
+        const processMove = (x, y, player) => {
+            setBoard(prev => {
+                const newBoard = prev.map(r => [...r]);
+                newBoard[y][x] = player;
+                const wLine = checkWin(newBoard, x, y, player);
+                if (wLine) {
+                    setWinner(player);
+                    setWinningLine(wLine);
+                    setScore(s => ({ ...s, [player]: s[player] + 1 }));
+                } else if (newBoard.every(row => row.every(c => c !== null))) {
+                    setWinner('DRAW');
+                } else {
+                    setCurrentPlayer(p => p === 'X' ? 'O' : 'X');
+                }
+                return newBoard;
+            });
+            setHistory(prev => [...prev, { x, y }]);
+        };
+
+        const onCellClick = (x, y) => {
+          if (winner || board[y][x] || isAiThinking || waitingForResetResponse || resetRequestFromOpponent) return;
+          if (mode === 'PVP_ONLINE') {
+            if (currentPlayer !== myPlayerSide) return;
+            if (connRef.current && connRef.current.open) {
+                connRef.current.send({ type: 'MOVE', x, y, player: myPlayerSide });
+                processMove(x, y, myPlayerSide);
+            }
+          } else if (mode === 'PVE') {
+              if (currentPlayer !== myPlayerSide) return;
+              processMove(x, y, currentPlayer);
+          } else {
+              processMove(x, y, currentPlayer);
+          }
+        };
+
+        const undoMove = () => {
+          if (history.length === 0 || winner || mode === 'PVP_ONLINE' || waitingForResetResponse) return;
+          const steps = mode === 'PVE' ? 2 : 1;
+          if (history.length < steps) { resetGame(); return; }
+          const newHistory = history.slice(0, history.length - steps);
+          setHistory(newHistory);
+          setBoard(prev => { const nb = prev.map(r => [...r]); history.slice(history.length - steps).forEach(p => nb[p.y][p.x] = null); return nb; });
+          if (mode === 'PVE') setCurrentPlayer(myPlayerSide); else setCurrentPlayer(p => p === 'X' ? 'O' : 'X');
+          setWinner(null); setWinningLine(null);
+        };
+
+        const requestOnlineReset = () => {
+            if (mode !== 'PVP_ONLINE' || !connRef.current) { resetGame(); return; }
+            setWaitingForResetResponse(true); connRef.current.send({ type: 'RESET_REQUEST' });
+        }
+        const respondToReset = (accept) => {
+            setResetRequestFromOpponent(false);
+            if (accept) { resetGame(); connRef.current.send({ type: 'RESET_RESPONSE', accept: true }); }
+            else { connRef.current.send({ type: 'RESET_RESPONSE', accept: false }); }
+        }
+
+        useEffect(() => {
+          if (mode === 'PVE' && currentPlayer !== myPlayerSide && !winner) {
+            setIsAiThinking(true);
+            const timer = setTimeout(() => {
+              const aiSide = myPlayerSide === 'X' ? 'O' : 'X';
+              const move = getBestMove(board, aiSide);
+              processMove(move.x, move.y, aiSide);
+              setIsAiThinking(false);
+            }, 500);
+            return () => clearTimeout(timer);
+          }
+        }, [currentPlayer, mode, winner, board, myPlayerSide]);
+
+        const handleRPSSelect = (move) => {
+            setRpsMyMove(move);
+            if (connRef.current) connRef.current.send({ type: 'RPS_MOVE', move });
+            checkRPSResult(move, rpsOpponentMove);
+        }
+        const checkRPSResult = (my, opp) => {
+            if (!my || !opp) return;
+            let iWin = false, draw = false;
+            if (my === opp) draw = true;
+            else if ((my === 'ROCK' && opp === 'SCISSORS') || (my === 'PAPER' && opp === 'ROCK') || (my === 'SCISSORS' && opp === 'PAPER')) iWin = true;
+            if (draw) {
+                setRpsResult("Hòa! Đấu lại..."); setTimeout(() => { setRpsMyMove(null); setRpsOpponentMove(null); setRpsResult(null); }, 2000);
+            } else {
+                setRpsResult(iWin ? "Bạn thắng! Bạn đi trước (X)" : `${onlineState.opponentName} thắng! Họ đi trước (X)`);
+                setTimeout(() => { setOnlineState(prev => ({ ...prev, status: 'CONNECTED' })); setMyPlayerSide(iWin ? 'X' : 'O'); setCurrentPlayer('X'); resetGame(); }, 2500);
+            }
+        }
+
+        const initPeer = (currentName, currentAvatar) => {
+          if (peerRef.current && !peerRef.current.destroyed) return peerRef.current;
+          const peer = new Peer(null, { debug: 1, config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }] } });
+          peerRef.current = peer;
+          peer.on('open', (id) => setOnlineState(prev => ({ ...prev, peerId: id })));
+          peer.on('connection', (conn) => handleConnection(conn, currentName, currentAvatar));
+          peer.on('error', (err) => { setOnlineError("Lỗi kết nối: " + err.type); setOnlineState(prev => ({ ...prev, status: 'ERROR' })); });
+          return peer;
+        };
+
+        const handleConnection = (conn, myName, myAvatar) => {
+          connRef.current = conn;
+          const sendHello = () => conn.send({ type: 'HELLO', name: myName, avatar: myAvatar });
+          if (conn.open) sendHello(); else conn.on('open', sendHello);
+          
+          conn.on('data', (data) => {
+            if (data.type === 'HELLO') {
+                 setOnlineState(prev => ({ ...prev, status: 'RPS_BATTLE', conn, opponentName: data.name || 'Đối thủ', opponentAvatar: data.avatar || '👤' }));
+                 setScore({ X: 0, O: 0 });
+                 setOnlineError(null); setRpsMyMove(null); setRpsOpponentMove(null); setRpsResult(null);
+                 try { if (window.history.pushState) { const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname; window.history.pushState({path:newUrl},'',newUrl); } } catch(e) { console.warn("Cannot update history:", e); }
+            }
+            else if (data.type === 'RPS_MOVE') setRpsOpponentMove(data.move);
+            else if (data.type === 'MOVE') {
+                if (winnerRef.current) return;
+                processMove(data.x, data.y, data.player);
+            }
+            else if (data.type === 'RESET_REQUEST') setResetRequestFromOpponent(true);
+            else if (data.type === 'RESET_RESPONSE') { setWaitingForResetResponse(false); if (data.accept) resetGame(); else alert('Đối thủ từ chối.'); }
+          });
+          conn.on('close', () => { alert('Đối thủ đã thoát!'); setOnlineState(prev => ({ ...prev, status: 'DISCONNECTED', conn: null })); setMode(null); });
+        };
+
+        useEffect(() => {
+            if (onlineState.status === 'RPS_BATTLE' && rpsMyMove && rpsOpponentMove && !rpsResult) checkRPSResult(rpsMyMove, rpsOpponentMove);
+        }, [rpsMyMove, rpsOpponentMove, onlineState.status, rpsResult]);
+
+        const createRoom = (name, avatar) => {
+          if (peerRef.current) peerRef.current.destroy();
+          setOnlineError(null); setOnlineState(prev => ({ ...prev, isHost: true, status: 'CONNECTING', peerId: null, myName: name, myAvatar: avatar })); initPeer(name, avatar);
+        };
+        const joinRoom = (hostId, name, avatar) => {
+          const cleanId = hostId.trim(); if (!cleanId) return;
+          setOnlineError(null); setOnlineState(prev => ({ ...prev, isHost: false, status: 'CONNECTING', myName: name, myAvatar: avatar }));
+          const peer = initPeer(name, avatar);
+          const tryConnect = () => { if (!peer.open || !peer.id) { setTimeout(tryConnect, 200); return; } const conn = peer.connect(cleanId, { reliable: true, serialization: 'json' }); handleConnection(conn, name, avatar); setTimeout(() => { if (connRef.current && !connRef.current.open) setOnlineError("Kết nối quá lâu."); }, 8000); };
+          tryConnect();
+        };
+        const destroyPeer = () => { 
+            if (connRef.current) { connRef.current.close(); connRef.current = null; } 
+            if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; } 
+            setOnlineState(prev => ({...prev, isHost: false, peerId: null, status: 'DISCONNECTED'}));
+        };
+        const copyInviteLink = () => {
+            if (!onlineState.peerId) return;
+            const url = `${window.location.protocol}//${window.location.host}${window.location.pathname}?room=${onlineState.peerId}`;
+            navigator.clipboard.writeText(url).then(() => { setCopySuccess(true); setTimeout(() => setCopySuccess(false), 2000); });
+        };
+
+        const startGamePVE = (who) => {
+             setMode('PVE'); setPveStartOption(null); resetGame();
+             setScore({ X: 0, O: 0 }); // Reset điểm khi bắt đầu chế độ mới
+             setOnlineState(prev => ({ ...prev, myName: localName, myAvatar: localAvatar, opponentName: 'AI Bot', opponentAvatar: '🤖' }));
+             let f = 'X', s = 'X'; if (who === 'AI') { f='X'; s='O'; } else if (who === 'RANDOM' && Math.random()>0.5) { f='X'; s='O'; }
+             setCurrentPlayer(f); setMyPlayerSide(s);
+        };
+        const startGameLocal = (name, avatar) => { setOnlineState(prev => ({...prev, myName: name || 'Người 1', myAvatar: avatar, opponentName: 'Người 2', opponentAvatar: '👤'})); setScore({ X: 0, O: 0 }); setMode('PVP_LOCAL'); resetGame(); }
+
+        const getPlayerInfo = (side) => {
+            if (mode === 'PVE') return myPlayerSide === side ? {name: localName, avatar: localAvatar} : {name: 'AI Bot', avatar: '🤖'};
+            if (mode === 'PVP_ONLINE') return myPlayerSide === side ? {name: onlineState.myName, avatar: onlineState.myAvatar} : {name: onlineState.opponentName, avatar: onlineState.opponentAvatar};
+            return side === 'X' ? {name: onlineState.myName, avatar: onlineState.myAvatar} : {name: onlineState.opponentName, avatar: '👤'};
+        }
+
+        // RENDER
+        if (!mode && !pveStartOption) {
+          return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
+              <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl max-w-md w-full text-center">
+                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400 mb-2">CARO AI PRO</h1>
+                <p className="text-slate-400 mb-6">Thách thức trí tuệ đỉnh cao</p>
+                <div className="mb-6 flex flex-col gap-2 items-center">
+                    <label className="text-xs text-slate-500 w-full text-left ml-1">Chọn Avatar & Tên:</label>
+                    <AvatarSelector selectedAvatar={localAvatar} onSelect={setLocalAvatar} />
+                    <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white font-bold" maxLength={10} />
+                </div>
+                <div className="space-y-4">
+                  <button onClick={() => { setOnlineState(s => ({...s, myName: localName, myAvatar: localAvatar})); setPveStartOption('YOU'); }} className="w-full py-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-blue-500 rounded-xl text-lg font-bold flex items-center justify-center gap-2 group"><span>🤖</span> Đấu với AI</button>
+                  <button onClick={() => startGameLocal(localName, localAvatar)} className="w-full py-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-green-500 rounded-xl text-lg font-bold flex items-center justify-center gap-2 group"><span>👥</span> 2 Người (Local)</button>
+                  <button onClick={() => { destroyPeer(); setMode('PVP_ONLINE'); }} className="w-full py-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-purple-500 rounded-xl text-lg font-bold flex items-center justify-center gap-2 group"><span>🌐</span> Chơi Online (P2P)</button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+        if (pveStartOption) return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
+              <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
+                 <h2 className="text-2xl font-bold mb-4">Ai đi trước?</h2>
+                 <div className="space-y-3">
+                     <button onClick={() => startGamePVE('YOU')} className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold">Bạn đi trước (X)</button>
+                     <button onClick={() => startGamePVE('AI')} className="w-full py-3 bg-red-600 hover:bg-red-500 rounded-lg font-bold">AI đi trước (O)</button>
+                     <button onClick={() => startGamePVE('RANDOM')} className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-lg font-bold">Ngẫu nhiên</button>
+                 </div>
+                 <button onClick={() => setPveStartOption(null)} className="mt-4 text-slate-400 hover:text-white underline">Quay lại</button>
+              </div>
+            </div>
+        );
+        if (mode === 'PVP_ONLINE' && onlineState.status !== 'CONNECTED' && onlineState.status !== 'RPS_BATTLE') {
+          return (
+              <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
+                  <div className="bg-slate-900 border border-slate-700 p-8 rounded-2xl shadow-2xl max-w-md w-full flex flex-col items-center">
+                      <h2 className="text-2xl font-bold mb-6">Kết nối Online</h2>
+                      {onlineState.isHost && (
+                          <div className="text-center w-full animate-fade-in">
+                              <p className="text-slate-400 mb-2">Gửi ID này cho bạn bè:</p>
+                              {onlineState.peerId ? (
+                                <div className="flex flex-col gap-3">
+                                    <div className="bg-slate-950 p-4 rounded border border-slate-700 font-mono text-xl select-all text-yellow-400 mb-4 break-all">{onlineState.peerId}</div>
+                                    <button onClick={copyInviteLink} className={`px-4 py-2 rounded font-bold transition-all ${copySuccess ? 'bg-green-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}>{copySuccess ? 'Đã copy link!' : '📋 Sao chép Link Mời'}</button>
+                                </div>
+                              ) : <div className="loader mx-auto mb-4"></div>}
+                              <div className="flex items-center justify-center gap-2 text-slate-500 my-6"><div className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></div>Đang chờ đối thủ...</div>
+                              <div className="border-t border-slate-700 pt-4">
+                                 <p className="text-xs text-slate-500 mb-2">Bạn của bạn đã tạo phòng rồi?</p>
+                                 <button onClick={() => destroyPeer()} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded border border-slate-600 font-bold transition-colors text-sm">Hủy Host & Nhập mã</button>
+                             </div>
+                          </div>
+                      )}
+                      {!onlineState.isHost && (
+                         <div className="w-full">
+                           {onlineState.status === 'CONNECTING' ? <div className="text-center"><div className="text-slate-400 mb-2">Đang kết nối tới máy chủ...</div></div> : <OnlineMenu onCreate={createRoom} onJoin={joinRoom} onBack={() => { destroyPeer(); setMode(null); }} isConnecting={false} error={onlineError} initialName={localName} initialAvatar={localAvatar} />}
+                         </div>
+                      )}
+                      <button onClick={() => { destroyPeer(); setMode(null); }} className="mt-6 text-slate-500 hover:text-white underline">Huỷ bỏ</button>
+                  </div>
+              </div>
+          )
+        }
+        return (
+          <div className="h-screen w-full bg-slate-950 flex flex-col md:flex-row overflow-hidden relative">
+            {onlineState.status === 'RPS_BATTLE' && <RockPaperScissors myMove={rpsMyMove} opponentMove={rpsOpponentMove} onSelect={handleRPSSelect} resultMessage={rpsResult} opponentName={onlineState.opponentName} />}
+            {resetRequestFromOpponent && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-600 shadow-2xl max-w-sm w-full text-center">
+                        <h3 className="text-xl font-bold mb-4 text-white">Yêu cầu ván mới</h3>
+                        <p className="text-slate-300 mb-6">{onlineState.opponentName} muốn chơi ván mới. Bạn có đồng ý?</p>
+                        <div className="flex gap-3"><button onClick={() => respondToReset(true)} className="flex-1 py-2 bg-green-600 font-bold rounded">Đồng ý</button><button onClick={() => respondToReset(false)} className="flex-1 py-2 bg-slate-600 font-bold rounded">Từ chối</button></div>
+                    </div>
+                </div>
+            )}
+            {waitingForResetResponse && ( <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"><div className="text-white font-bold flex flex-col items-center"><div className="loader mb-4"></div>Đang chờ {onlineState.opponentName} xác nhận...</div></div> )}
+
+            <div className="w-full md:w-80 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-800 p-4 flex flex-col z-10 shadow-xl">
+              <div className="flex items-center gap-2 mb-6 cursor-pointer" onClick={() => { destroyPeer(); setMode(null); }}>
+                  <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center font-bold">C</div><span className="font-bold text-lg">Caro Pro</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                 {['X', 'O'].map((side) => {
+                    const info = getPlayerInfo(side);
+                    return (
+                        <div key={side} className={`p-3 rounded-lg border flex flex-col items-center transition-all ${currentPlayer === side ? (side==='X'?'bg-blue-500/10 border-blue-500 shadow-lg shadow-blue-500/10':'bg-red-500/10 border-red-500 shadow-lg shadow-red-500/10') : 'bg-slate-800 border-slate-700'}`}>
+                            <span className={`${side==='X'?'text-blue-400':'text-red-400'} font-bold text-xl`}>{side}</span>
+                            <AvatarDisplay avatar={info.avatar} />
+                            <span className="text-xs text-slate-400 mb-1 truncate w-full text-center px-1 font-bold">{info.name}</span>
+                            <span className="text-2xl font-black">{score[side]}</span>
+                        </div>
+                    )
+                })}
+              </div>
+              <div className="mb-6 text-center h-12 flex items-center justify-center">
+                  {winner ? (
+                      <div className="py-2 px-4 bg-yellow-500/20 text-yellow-300 rounded-lg border border-yellow-500/50 font-bold animate-pulse">{winner === 'DRAW' ? 'Hòa!' : `🏆 ${getPlayerInfo(winner).name} Thắng!`}</div>
+                  ) : ( <div className="text-slate-300 flex items-center justify-center gap-2">{isAiThinking ? <>🤖 AI đang tính toán...</> : <>Lượt của: <span className={`font-bold ${currentPlayer === 'X' ? 'text-blue-400' : 'text-red-400'}`}>{currentPlayer}</span></>}</div> )}
+              </div>
+              <div className="mt-auto space-y-3">
+                  <button onClick={undoMove} disabled={mode === 'PVP_ONLINE' || !!winner || history.length === 0} className="w-full py-3 bg-slate-800 hover:bg-slate-700 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors">↩️ Đi lại</button>
+                  <button onClick={() => { if(mode === 'PVP_ONLINE') requestOnlineReset(); else resetGame(); }} className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold transition-colors shadow-lg shadow-indigo-500/20">🔄 Ván mới</button>
+                  <button onClick={() => { destroyPeer(); setMode(null); }} className="w-full py-3 bg-slate-800 text-red-400 hover:bg-slate-700 rounded-lg font-semibold transition-colors">Thoát</button>
+              </div>
+            </div>
+            <div className="flex-1 flex items-center justify-center p-4 bg-slate-950 relative">
+              <Board board={board} lastMove={history[history.length - 1] || null} winningLine={winningLine} onCellClick={onCellClick} disabled={!!winner || isAiThinking || (mode === 'PVP_ONLINE' && ((myPlayerSide !== currentPlayer))) || onlineState.status === 'RPS_BATTLE'} />
+              {!winner && !isAiThinking && history.length === 0 && onlineState.status !== 'RPS_BATTLE' && <div className="absolute top-8 bg-slate-800/90 text-white px-6 py-2 rounded-full border border-slate-600 shadow-lg animate-bounce">{currentPlayer === myPlayerSide ? "Bạn đi trước!" : `${onlineState.opponentName} đi trước!`}</div>}
+            </div>
+          </div>
+        );
+      }
+      const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<App />);
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
